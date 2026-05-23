@@ -260,9 +260,11 @@ output{display:block;}
 <script>
 // ===== PRO Configuration =====
 const PRO_PREFIX = 'PDFTOOLS-';
-const PRO_SECRET = 1959;
+// Demo key PDFTOOLS-ABCD-EFGH-IJKL-MNOP itself works as a valid key
+const PRO_SECRET = 'PDFTOOLS-ABCD-EFGH-IJKL-MNOP'.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
 const GUMROAD_PRODUCT_ID = 'MIMZ-W7erBRfTCX7oWknpQ==';
 const GUMROAD_BUY_URL = 'https://xuebo8.gumroad.com/l/thdyk';
+const MAX_DEVICES = 3;
 const FREE_LIMITS = {
   merge: { pages: 10, sizeMB: 10 },
   split: { pages: 10, sizeMB: 10 },
@@ -314,52 +316,93 @@ setupDnD('drop-img2pdf', 'file-img2pdf');
 setupDnD('drop-pdf2img', 'file-pdf2img');
 
 // ===== PRO Key Validation =====
-function validateProKey(key) {
+function validateProKeyFormat(key) {
   if (!key || typeof key !== 'string') return false;
-  const k = key.trim();
-  if (!k.startsWith(PRO_PREFIX)) return false;
-  const rest = k.slice(PRO_PREFIX.length);
-  const parts = rest.split('-');
-  if (parts.length !== 4) return false;
-  if (parts.some(p => p.length < 2 || p.length > 6)) return false;
-  const checksum = parts.reduce((s, p) => {
-    return p.split('').reduce((a, c) => a + c.charCodeAt(0), s);
-  }, 0);
-  return checksum % 10000 === PRO_SECRET;
+  return /^PDFTOOLS-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(key.trim().toUpperCase());
+}
+
+function offlineProChecksum(key) {
+  var sum = key.trim().toUpperCase().split('').reduce(function(a, c) { return a + c.charCodeAt(0); }, 0);
+  return sum === PRO_SECRET;
+}
+
+function getDeviceId() {
+  var id = localStorage.getItem('pdf_device_id');
+  if (!id) {
+    id = 'DEV-' + Math.random().toString(36).slice(2, 10).toUpperCase();
+    localStorage.setItem('pdf_device_id', id);
+  }
+  return id;
+}
+
+function getRegisteredDevices(key) {
+  try {
+    var data = JSON.parse(localStorage.getItem('pdf_devices_' + key) || '[]');
+    return Array.isArray(data) ? data : [];
+  } catch (e) { return []; }
+}
+
+function registerDevice(key) {
+  var devices = getRegisteredDevices(key);
+  var did = getDeviceId();
+  if (devices.indexOf(did) === -1) {
+    devices.push(did);
+    localStorage.setItem('pdf_devices_' + key, JSON.stringify(devices));
+  }
+}
+
+function isDeviceLimitReached(key) {
+  var devices = getRegisteredDevices(key);
+  var did = getDeviceId();
+  if (devices.indexOf(did) !== -1) return false;
+  return devices.length >= MAX_DEVICES;
 }
 
 async function verifyLicenseOnline(key) {
   try {
-    const r = await fetch('https://api.gumroad.com/v2/licenses/verify', {
+    var r = await fetch('https://api.gumroad.com/v2/licenses/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: 'product_id=' + encodeURIComponent(GUMROAD_PRODUCT_ID) + '&license_key=' + encodeURIComponent(key)
     });
-    const d = await r.json();
+    var d = await r.json();
     return d.success && d.purchase;
-  } catch { return false; }
+  } catch (e) { return false; }
 }
 
 async function activateLicense() {
-  const input = document.getElementById('license-input');
-  const key = input.value.trim();
-  if (!key || !key.startsWith(PRO_PREFIX)) { toast('Invalid license key format'); return; }
-  if (validateProKey(key)) {
-    // Offline checksum passed
+  var input = document.getElementById('license-input');
+  var key = input.value.trim().toUpperCase();
+
+  if (key.startsWith(PRO_PREFIX)) {
+    if (!validateProKeyFormat(key)) {
+      toast('Invalid format. Expected: PDFTOOLS-XXXX-XXXX-XXXX-XXXX'); return;
+    }
+    if (!offlineProChecksum(key)) {
+      toast('Invalid PRO key.'); return;
+    }
+    if (isDeviceLimitReached(key)) {
+      toast('This key has reached the 3-device limit.'); return;
+    }
     setPro(key);
     return;
   }
-  // Try Gumroad API for keys that don't match offline format
+
+  // Gumroad license key — verify via API
   toast('Verifying online...');
-  const valid = await verifyLicenseOnline(key);
+  var valid = await verifyLicenseOnline(key);
   if (valid) {
+    if (isDeviceLimitReached(key)) {
+      toast('This key has reached the 3-device limit.'); return;
+    }
     setPro(key);
   } else {
-    toast('Invalid license key');
+    toast('Key verification failed. Please check your key and try again.');
   }
 }
 
 function setPro(key) {
+  registerDevice(key);
   localStorage.setItem('pdf_tools_pro_key', key);
   localStorage.setItem('pdf_tools_pro', 'true');
   proActivated = true;
@@ -368,22 +411,26 @@ function setPro(key) {
   toast('PRO activated! All limits removed.');
 }
 
+var buyListenerAdded = false;
 function buyPro() {
   window.open(GUMROAD_BUY_URL, 'gumroad', 'width=600,height=700');
-  window.addEventListener('message', e => {
-    if (e.origin.includes('gumroad.com') && e.data && e.data.success && e.data.purchase) {
-      const key = e.data.license_key;
-      if (key) {
-        document.getElementById('license-input').value = key;
-        activateLicense();
+  if (!buyListenerAdded) {
+    buyListenerAdded = true;
+    window.addEventListener('message', function(e) {
+      if (e.origin.indexOf('gumroad.com') !== -1 && e.data && e.data.success && e.data.purchase) {
+        var key = e.data.license_key;
+        if (key) {
+          document.getElementById('license-input').value = key;
+          activateLicense();
+        }
       }
-    }
-  });
+    });
+  }
 }
 
 function showProModal(source) {
   document.getElementById('pro-modal').style.display = 'flex';
-  const existing = localStorage.getItem('pdf_tools_pro_key');
+  var existing = localStorage.getItem('pdf_tools_pro_key');
   if (existing) document.getElementById('license-input').value = existing;
 }
 
@@ -392,11 +439,11 @@ function closeProModal() {
 }
 
 function updateLimits() {
-  const hints = document.querySelectorAll('.free-hint');
-  hints.forEach(h => {
-    if (proActivated) h.style.display = 'none';
-    else h.style.display = '';
-  });
+  var hints = document.querySelectorAll('.free-hint');
+  for (var i = 0; i < hints.length; i++) {
+    if (proActivated) hints[i].style.display = 'none';
+    else hints[i].style.display = '';
+  }
 }
 
 // Check existing PRO on load
@@ -405,38 +452,44 @@ updateLimits();
 
 // ===== Merge PDFs =====
 function handleMergeFiles(files) {
-  const list = document.getElementById('merge-list');
-  state.merge.files = Array.from(files).filter(f => f.type === 'application/pdf');
+  var list = document.getElementById('merge-list');
+  state.merge.files = [];
+  for (var i = 0; i < files.length; i++) {
+    if (files[i].type === 'application/pdf') state.merge.files.push(files[i]);
+  }
   if (state.merge.files.length === 0) { list.innerHTML = ''; return; }
   renderMergeList();
 }
 
 function renderMergeList() {
-  const list = document.getElementById('merge-list');
-  list.innerHTML = state.merge.files.map((f, i) => `
-    <div class="file-item" data-index="${i}">
-      <span class="name">${f.name}</span>
-      <span class="size">${(f.size/1024).toFixed(0)} KB</span>
-      <span class="sort-controls">
-        <button onclick="moveMerge(${i},-1)" ${i===0?'disabled':''} title="Move up">▲</button>
-        <button onclick="moveMerge(${i},1)" ${i===state.merge.files.length-1?'disabled':''} title="Move down">▼</button>
-      </span>
-      <span class="remove" onclick="removeMerge(${i})">✕</span>
-    </div>
-  `).join('');
+  var list = document.getElementById('merge-list');
+  var html = '';
+  for (var i = 0; i < state.merge.files.length; i++) {
+    var f = state.merge.files[i];
+    html += '<div class="file-item" data-index="' + i + '">' +
+      '<span class="name">' + f.name + '</span>' +
+      '<span class="size">' + (f.size/1024).toFixed(0) + ' KB</span>' +
+      '<span class="sort-controls">' +
+        '<button onclick="moveMerge(' + i + ',-1)"' + (i===0?' disabled':'') + ' title="Move up">▲</button>' +
+        '<button onclick="moveMerge(' + i + ',1)"' + (i===state.merge.files.length-1?' disabled':'') + ' title="Move down">▼</button>' +
+      '</span>' +
+      '<span class="remove" onclick="removeMerge(' + i + ')">✕</span>' +
+    '</div>';
+  }
+  list.innerHTML = html;
   document.getElementById('btn-merge').disabled = state.merge.files.length < 2;
-  const zone = document.getElementById('drop-merge');
+  var zone = document.getElementById('drop-merge');
   zone.querySelector('.text').innerHTML = state.merge.files.length > 0
-    ? `<strong>${state.merge.files.length}</strong> file(s) selected — click to add more`
+    ? '<strong>' + state.merge.files.length + '</strong> file(s) selected — click to add more'
     : '<strong>Click to upload</strong> or drag and drop PDF files here';
   zone.classList.toggle('has-files', state.merge.files.length > 0);
 }
 
 function moveMerge(idx, dir) {
-  const arr = state.merge.files;
-  const target = idx + dir;
+  var arr = state.merge.files;
+  var target = idx + dir;
   if (target < 0 || target >= arr.length) return;
-  [arr[idx], arr[target]] = [arr[target], arr[idx]];
+  var tmp = arr[idx]; arr[idx] = arr[target]; arr[target] = tmp;
   renderMergeList();
 }
 
@@ -447,75 +500,72 @@ function removeMerge(idx) {
 
 async function doMerge() {
   if (state.merge.files.length < 2) { toast('Please add at least 2 PDF files'); return; }
-  const prog = document.getElementById('merge-progress');
-  const fill = document.getElementById('merge-fill');
-  const status = document.getElementById('merge-status');
+  var prog = document.getElementById('merge-progress');
+  var fill = document.getElementById('merge-fill');
+  var status = document.getElementById('merge-status');
   prog.style.display = ''; status.textContent = 'Processing...';
   try {
-    const mergedPdf = await PDFLib.PDFDocument.create();
-    let totalPages = 0;
-    for (let i = 0; i < state.merge.files.length; i++) {
-      const buf = await state.merge.files[i].arrayBuffer();
-      const pdf = await PDFLib.PDFDocument.load(buf, { ignoreEncryption: true });
-      const indices = pdf.getPageIndices();
+    var mergedPdf = await PDFLib.PDFDocument.create();
+    var totalPages = 0;
+    for (var i = 0; i < state.merge.files.length; i++) {
+      var buf = await state.merge.files[i].arrayBuffer();
+      var pdf = await PDFLib.PDFDocument.load(buf, { ignoreEncryption: true });
+      var indices = pdf.getPageIndices();
       if (!proActivated && totalPages + indices.length > FREE_LIMITS.merge.pages) {
-        const allowed = FREE_LIMITS.merge.pages - totalPages;
+        var allowed = FREE_LIMITS.merge.pages - totalPages;
         if (allowed <= 0) { status.textContent = 'Free limit reached. Please get PRO.'; return; }
-        const copied = await mergedPdf.copyPages(pdf, indices.slice(0, allowed));
-        copied.forEach(p => mergedPdf.addPage(p));
+        var copied = await mergedPdf.copyPages(pdf, indices.slice(0, allowed));
+        for (var j = 0; j < copied.length; j++) mergedPdf.addPage(copied[j]);
         totalPages += allowed;
-        status.textContent = `Free limit: added ${allowed} pages (max ${FREE_LIMITS.merge.pages})`;
+        status.textContent = 'Free limit: added ' + allowed + ' pages (max ' + FREE_LIMITS.merge.pages + ')';
         break;
       } else {
-        const copied = await mergedPdf.copyPages(pdf, indices);
-        copied.forEach(p => mergedPdf.addPage(p));
+        var copied = await mergedPdf.copyPages(pdf, indices);
+        for (var j = 0; j < copied.length; j++) mergedPdf.addPage(copied[j]);
         totalPages += indices.length;
       }
       fill.style.width = ((i + 1) / state.merge.files.length * 100) + '%';
     }
-    const bytes = await mergedPdf.save();
+    var bytes = await mergedPdf.save();
     downloadBlob(bytes, 'merged.pdf', 'application/pdf');
-    status.textContent = `Merged ${totalPages} pages from ${state.merge.files.length} files`;
+    status.textContent = 'Merged ' + totalPages + ' pages from ' + state.merge.files.length + ' files';
   } catch (e) { status.textContent = 'Error: ' + e.message; }
 }
 
 // ===== Split PDF =====
 async function handleSplitFile(files) {
   if (!files.length) return;
-  const file = files[0];
+  var file = files[0];
   if (file.type !== 'application/pdf') { toast('Please select a PDF file'); return; }
   state.split.file = file;
-  document.getElementById('split-list').innerHTML = `
-    <div class="file-item">
-      <span class="name">${file.name}</span>
-      <span class="size">${(file.size/1024).toFixed(0)} KB</span>
-    </div>`;
+  document.getElementById('split-list').innerHTML =
+    '<div class="file-item"><span class="name">' + file.name + '</span><span class="size">' + (file.size/1024).toFixed(0) + ' KB</span></div>';
   document.getElementById('drop-split').classList.add('has-files');
   document.getElementById('btn-split').disabled = true;
   document.getElementById('btn-split-all').disabled = true;
   document.getElementById('split-pages').disabled = true;
   document.getElementById('split-preview').innerHTML = '';
   try {
-    const buf = await file.arrayBuffer();
-    const pdf = await PDFLib.PDFDocument.load(buf, { ignoreEncryption: true });
+    var buf = await file.arrayBuffer();
+    var pdf = await PDFLib.PDFDocument.load(buf, { ignoreEncryption: true });
     state.split.pdfDoc = pdf;
     state.split.totalPages = pdf.getPageCount();
     document.getElementById('split-pages').disabled = false;
-    document.getElementById('split-pages').placeholder = `1-${pdf.getPageCount()} (all pages)`;
+    document.getElementById('split-pages').placeholder = '1-' + pdf.getPageCount() + ' (all pages)';
     renderSplitPreview(pdf);
   } catch (e) { toast('Error loading PDF: ' + e.message); }
 }
 
 async function renderSplitPreview(pdf) {
-  const container = document.getElementById('split-preview');
+  var container = document.getElementById('split-preview');
   container.innerHTML = '';
-  const count = Math.min(pdf.getPageCount(), 10);
-  for (let i = 0; i < count; i++) {
-    const div = document.createElement('div');
+  var count = Math.min(pdf.getPageCount(), 10);
+  for (var i = 0; i < count; i++) {
+    var div = document.createElement('div');
     div.className = 'preview-item';
-    const span = document.createElement('div');
+    var span = document.createElement('div');
     span.className = 'page-label';
-    span.textContent = `Page ${i + 1}`;
+    span.textContent = 'Page ' + (i + 1);
     div.appendChild(span);
     container.appendChild(div);
   }
@@ -524,105 +574,123 @@ async function renderSplitPreview(pdf) {
 }
 
 function parsePageRange(str, total) {
-  if (!str || !str.trim()) return Array.from({length: total}, (_, i) => i);
-  const pages = new Set();
-  str.split(',').forEach(part => {
-    part = part.trim();
-    if (part.includes('-')) {
-      const [s, e] = part.split('-').map(n => parseInt(n.trim()));
-      if (!isNaN(s) && !isNaN(e)) for (let i = s; i <= e; i++) pages.add(i - 1);
+  if (!str || !str.trim()) {
+    var all = [];
+    for (var i = 0; i < total; i++) all.push(i);
+    return all;
+  }
+  var pages = {};
+  var parts = str.split(',');
+  for (var p = 0; p < parts.length; p++) {
+    var part = parts[p].trim();
+    if (part.indexOf('-') !== -1) {
+      var range = part.split('-');
+      var s = parseInt(range[0].trim());
+      var e = parseInt(range[1].trim());
+      if (!isNaN(s) && !isNaN(e)) for (var i = s; i <= e; i++) pages[i - 1] = true;
     } else {
-      const n = parseInt(part);
-      if (!isNaN(n)) pages.add(n - 1);
+      var n = parseInt(part);
+      if (!isNaN(n)) pages[n - 1] = true;
     }
-  });
-  return Array.from(pages).filter(i => i >= 0 && i < total).sort((a, b) => a - b);
+  }
+  var result = [];
+  for (var key in pages) {
+    var idx = parseInt(key);
+    if (idx >= 0 && idx < total) result.push(idx);
+  }
+  result.sort(function(a, b) { return a - b; });
+  return result;
 }
 
 async function doSplit() {
-  const pdf = state.split.pdfDoc;
+  var pdf = state.split.pdfDoc;
   if (!pdf) { toast('Please load a PDF first'); return; }
-  const input = document.getElementById('split-pages');
-  const pages = parsePageRange(input.value.trim(), pdf.getPageCount());
+  var input = document.getElementById('split-pages');
+  var pages = parsePageRange(input.value.trim(), pdf.getPageCount());
   if (pages.length === 0) { toast('No valid pages specified'); return; }
   if (!proActivated && pages.length > FREE_LIMITS.split.pages) {
-    toast(`Free: max ${FREE_LIMITS.split.pages} pages. Get PRO for unlimited.`); return;
+    toast('Free: max ' + FREE_LIMITS.split.pages + ' pages. Get PRO for unlimited.'); return;
   }
-  const status = document.getElementById('split-status');
+  var status = document.getElementById('split-status');
   status.textContent = 'Processing...';
   try {
-    const newPdf = await PDFLib.PDFDocument.create();
-    const copied = await newPdf.copyPages(pdf, pages);
-    copied.forEach(p => newPdf.addPage(p));
-    const bytes = await newPdf.save();
-    const name = state.split.file.name.replace('.pdf', '') + `_pages_${pages.map(i=>i+1).join('-')}.pdf`;
+    var newPdf = await PDFLib.PDFDocument.create();
+    var copied = await newPdf.copyPages(pdf, pages);
+    for (var i = 0; i < copied.length; i++) newPdf.addPage(copied[i]);
+    var bytes = await newPdf.save();
+    var name = state.split.file.name.replace('.pdf', '') + '_pages_' + pages.map(function(i) { return i+1; }).join('-') + '.pdf';
     downloadBlob(bytes, name, 'application/pdf');
-    status.textContent = `Extracted ${pages.length} page(s)`;
+    status.textContent = 'Extracted ' + pages.length + ' page(s)';
   } catch (e) { status.textContent = 'Error: ' + e.message; }
 }
 
 async function splitAllPages() {
-  const pdf = state.split.pdfDoc;
+  var pdf = state.split.pdfDoc;
   if (!pdf) return;
-  const total = pdf.getPageCount();
+  var total = pdf.getPageCount();
   if (!proActivated && total > FREE_LIMITS.split.pages) {
-    toast(`Free: max ${FREE_LIMITS.split.pages} pages. Get PRO for unlimited.`); return;
+    toast('Free: max ' + FREE_LIMITS.split.pages + ' pages. Get PRO for unlimited.'); return;
   }
-  const status = document.getElementById('split-status');
-  status.textContent = `Splitting ${total} pages...`;
-  const fill = document.getElementById('split-fill');
+  var status = document.getElementById('split-status');
+  status.textContent = 'Splitting ' + total + ' pages...';
+  var fill = document.getElementById('split-fill');
   document.getElementById('split-progress').style.display = '';
   try {
-    const JSZip = window.JSZip;
-    const zip = new JSZip();
-    for (let i = 0; i < total; i++) {
-      const newPdf = await PDFLib.PDFDocument.create();
-      const [page] = await newPdf.copyPages(pdf, [i]);
-      newPdf.addPage(page);
-      const bytes = await newPdf.save();
-      zip.file(`page_${i + 1}.pdf`, bytes);
+    var zip = new JSZip();
+    for (var i = 0; i < total; i++) {
+      var newPdf = await PDFLib.PDFDocument.create();
+      var page = await newPdf.copyPages(pdf, [i]);
+      newPdf.addPage(page[0]);
+      var bytes = await newPdf.save();
+      zip.file('page_' + (i + 1) + '.pdf', bytes);
       fill.style.width = ((i + 1) / total * 100) + '%';
     }
-    const zipBytes = await zip.generateAsync({ type: 'blob' });
+    var zipBytes = await zip.generateAsync({ type: 'blob' });
     downloadBlob(zipBytes, state.split.file.name.replace('.pdf', '') + '_pages.zip', 'application/zip');
-    status.textContent = `Split ${total} pages into individual PDFs`;
+    status.textContent = 'Split ' + total + ' pages into individual PDFs';
   } catch (e) { status.textContent = 'Error: ' + e.message; }
   document.getElementById('split-progress').style.display = 'none';
 }
 
 // ===== Images to PDF =====
 function handleImg2PdfFiles(files) {
-  state.img2pdf.files = Array.from(files).filter(f => f.type.startsWith('image/'));
+  state.img2pdf.files = [];
+  for (var i = 0; i < files.length; i++) {
+    if (files[i].type.startsWith('image/')) state.img2pdf.files.push(files[i]);
+  }
   renderImg2PdfList();
 }
 
 function renderImg2PdfList() {
-  const list = document.getElementById('img2pdf-list');
-  const files = state.img2pdf.files;
-  list.innerHTML = files.map((f, i) => `
-    <div class="file-item" data-index="${i}">
-      <span class="name">${f.name}</span>
-      <span class="size">${(f.size/1024).toFixed(0)} KB</span>
-      <span class="sort-controls">
-        <button onclick="moveImg2Pdf(${i},-1)" ${i===0?'disabled':''} title="Move up">▲</button>
-        <button onclick="moveImg2Pdf(${i},1)" ${i===files.length-1?'disabled':''} title="Move down">▼</button>
-      </span>
-      <span class="remove" onclick="removeImg2Pdf(${i})">✕</span>
-    </div>
-  `).join('');
+  var list = document.getElementById('img2pdf-list');
+  var files = state.img2pdf.files;
+  var html = '';
+  for (var i = 0; i < files.length; i++) {
+    var f = files[i];
+    html += '<div class="file-item" data-index="' + i + '">' +
+      '<span class="name">' + f.name + '</span>' +
+      '<span class="size">' + (f.size/1024).toFixed(0) + ' KB</span>' +
+      '<span class="sort-controls">' +
+        '<button onclick="moveImg2Pdf(' + i + ',-1)"' + (i===0?' disabled':'') + ' title="Move up">▲</button>' +
+        '<button onclick="moveImg2Pdf(' + i + ',1)"' + (i===files.length-1?' disabled':'') + ' title="Move down">▼</button>' +
+      '</span>' +
+      '<span class="remove" onclick="removeImg2Pdf(' + i + ')">✕</span>' +
+    '</div>';
+  }
+  list.innerHTML = html;
   document.getElementById('btn-img2pdf').disabled = files.length === 0;
-  const zone = document.getElementById('drop-img2pdf');
+  var zone = document.getElementById('drop-img2pdf');
   zone.querySelector('.text').innerHTML = files.length > 0
-    ? `<strong>${files.length}</strong> image(s) selected — click to add more`
+    ? '<strong>' + files.length + '</strong> image(s) selected — click to add more'
     : '<strong>Click to upload</strong> or drag and drop images here';
   zone.classList.toggle('has-files', files.length > 0);
 }
 
 function moveImg2Pdf(idx, dir) {
-  const arr = state.img2pdf.files;
-  const target = idx + dir;
+  var arr = state.img2pdf.files;
+  var target = idx + dir;
   if (target < 0 || target >= arr.length) return;
-  [arr[idx], arr[target]] = [arr[target], arr[idx]];
+  var tmp = arr[idx]; arr[idx] = arr[target]; arr[target] = tmp;
   renderImg2PdfList();
 }
 
@@ -632,63 +700,61 @@ function removeImg2Pdf(idx) {
 }
 
 async function doImg2Pdf() {
-  const files = state.img2pdf.files;
+  var files = state.img2pdf.files;
   if (!files.length) { toast('Please add at least one image'); return; }
   if (!proActivated && files.length > FREE_LIMITS.img2pdf.images) {
-    toast(`Free: max ${FREE_LIMITS.img2pdf.images} images. Get PRO for unlimited.`); return;
+    toast('Free: max ' + FREE_LIMITS.img2pdf.images + ' images. Get PRO for unlimited.'); return;
   }
-  const status = document.getElementById('img2pdf-status');
-  const fill = document.getElementById('img2pdf-fill');
+  var status = document.getElementById('img2pdf-status');
+  var fill = document.getElementById('img2pdf-fill');
   document.getElementById('img2pdf-progress').style.display = '';
   status.textContent = 'Creating PDF...';
   try {
-    const { jsPDF } = window.jspdf;
-    const sizeOpt = document.getElementById('img2pdf-size').value;
-    const orientOpt = document.getElementById('img2pdf-orient').value;
-    let pdf;
-    for (let i = 0; i < files.length; i++) {
-      const imgData = await loadImageData(files[i]);
-      const img = await loadImage(imgData);
-      const iw = img.width, ih = img.height;
-      const isWide = iw > ih;
-      const orient = orientOpt === 'auto' ? (isWide ? 'l' : 'p') : orientOpt === 'landscape' ? 'l' : 'p';
+    var sizeOpt = document.getElementById('img2pdf-size').value;
+    var orientOpt = document.getElementById('img2pdf-orient').value;
+    var pdf = null;
+    for (var i = 0; i < files.length; i++) {
+      var imgData = await loadImageData(files[i]);
+      var img = await loadImage(imgData);
+      var iw = img.width, ih = img.height;
+      var isWide = iw > ih;
+      var orient = orientOpt === 'auto' ? (isWide ? 'l' : 'p') : orientOpt === 'landscape' ? 'l' : 'p';
       if (!pdf) {
-        const format = sizeOpt === 'fit' ? [iw, ih] : sizeOpt;
-        pdf = new jsPDF({ orientation: orient, unit: 'pt', format: format === 'fit' ? undefined : format });
+        pdf = new jspdf.jsPDF({ orientation: orient, unit: 'pt', format: sizeOpt === 'fit' ? [iw, ih] : sizeOpt });
       } else {
         pdf.addPage();
       }
       if (sizeOpt === 'fit') {
         pdf.addImage(imgData, 'JPEG', 0, 0, iw, ih);
       } else {
-        const pageW = pdf.internal.pageSize.getWidth();
-        const pageH = pdf.internal.pageSize.getHeight();
-        const scale = Math.min(pageW / iw, pageH / ih) * 0.95;
-        const dw = iw * scale, dh = ih * scale;
-        const x = (pageW - dw) / 2, y = (pageH - dh) / 2;
+        var pageW = pdf.internal.pageSize.getWidth();
+        var pageH = pdf.internal.pageSize.getHeight();
+        var scale = Math.min(pageW / iw, pageH / ih) * 0.95;
+        var dw = iw * scale, dh = ih * scale;
+        var x = (pageW - dw) / 2, y = (pageH - dh) / 2;
         pdf.addImage(imgData, 'JPEG', x, y, dw, dh);
       }
       fill.style.width = ((i + 1) / files.length * 100) + '%';
     }
     pdf.save('images.pdf');
-    status.textContent = `Created PDF with ${files.length} page(s)`;
+    status.textContent = 'Created PDF with ' + files.length + ' page(s)';
   } catch (e) { status.textContent = 'Error: ' + e.message; }
   document.getElementById('img2pdf-progress').style.display = 'none';
 }
 
 function loadImageData(file) {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result);
+  return new Promise(function(resolve, reject) {
+    var r = new FileReader();
+    r.onload = function() { resolve(r.result); };
     r.onerror = reject;
     r.readAsDataURL(file);
   });
 }
 
 function loadImage(src) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
+  return new Promise(function(resolve, reject) {
+    var img = new Image();
+    img.onload = function() { resolve(img); };
     img.onerror = reject;
     img.src = src;
   });
@@ -697,20 +763,17 @@ function loadImage(src) {
 // ===== PDF to Images =====
 async function handlePdf2ImgFile(files) {
   if (!files.length) return;
-  const file = files[0];
+  var file = files[0];
   if (file.type !== 'application/pdf') { toast('Please select a PDF file'); return; }
   state.pdf2img.file = file;
-  document.getElementById('pdf2img-list').innerHTML = `
-    <div class="file-item">
-      <span class="name">${file.name}</span>
-      <span class="size">${(file.size/1024).toFixed(0)} KB</span>
-    </div>`;
+  document.getElementById('pdf2img-list').innerHTML =
+    '<div class="file-item"><span class="name">' + file.name + '</span><span class="size">' + (file.size/1024).toFixed(0) + ' KB</span></div>';
   document.getElementById('drop-pdf2img').classList.add('has-files');
   document.getElementById('btn-pdf2img').disabled = true;
   try {
-    const buf = await file.arrayBuffer();
+    var buf = await file.arrayBuffer();
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-    const pdf = await pdfjsLib.getDocument({ data: buf.slice(0) }).promise;
+    var pdf = await pdfjsLib.getDocument({ data: buf.slice(0) }).promise;
     state.pdf2img.pdfDoc = pdf;
     state.pdf2img.totalPages = pdf.numPages;
     document.getElementById('btn-pdf2img').disabled = false;
@@ -719,89 +782,84 @@ async function handlePdf2ImgFile(files) {
 }
 
 async function renderPdf2ImgPreview(pdf) {
-  const container = document.getElementById('pdf2img-preview');
+  var container = document.getElementById('pdf2img-preview');
   container.innerHTML = '';
-  const count = Math.min(pdf.numPages, 10);
-  for (let i = 1; i <= count; i++) {
-    const div = document.createElement('div');
+  var count = Math.min(pdf.numPages, 10);
+  for (var i = 1; i <= count; i++) {
+    var div = document.createElement('div');
     div.className = 'preview-item';
     try {
-      const page = await pdf.getPage(i);
-      const vp = page.getViewport({ scale: 0.3 });
-      const canvas = document.createElement('canvas');
+      var page = await pdf.getPage(i);
+      var vp = page.getViewport({ scale: 0.3 });
+      var canvas = document.createElement('canvas');
       canvas.width = vp.width; canvas.height = vp.height;
-      const ctx = canvas.getContext('2d');
+      var ctx = canvas.getContext('2d');
       await page.render({ canvasContext: ctx, viewport: vp }).promise;
       div.appendChild(canvas);
-    } catch {}
-    const span = document.createElement('div');
+    } catch (e) {}
+    var span = document.createElement('div');
     span.className = 'page-label';
-    span.textContent = `Page ${i}`;
+    span.textContent = 'Page ' + i;
     div.appendChild(span);
     container.appendChild(div);
   }
 }
 
 async function doPdf2Img() {
-  const pdf = state.pdf2img.pdfDoc;
+  var pdf = state.pdf2img.pdfDoc;
   if (!pdf) { toast('Please load a PDF first'); return; }
-  const total = pdf.numPages;
+  var total = pdf.numPages;
   if (!proActivated && total > FREE_LIMITS.pdf2img.pages) {
-    toast(`Free: max ${FREE_LIMITS.pdf2img.pages} pages. Get PRO for unlimited.`); return;
+    toast('Free: max ' + FREE_LIMITS.pdf2img.pages + ' pages. Get PRO for unlimited.'); return;
   }
-  const status = document.getElementById('pdf2img-status');
-  const fill = document.getElementById('pdf2img-fill');
+  var status = document.getElementById('pdf2img-status');
+  var fill = document.getElementById('pdf2img-fill');
   document.getElementById('pdf2img-progress').style.display = '';
   status.textContent = 'Extracting images...';
-  const format = document.getElementById('pdf2img-format').value;
-  const scale = parseFloat(document.getElementById('pdf2img-scale').value);
-  const mime = format === 'png' ? 'image/png' : 'image/jpeg';
-  const ext = format === 'png' ? 'png' : 'jpg';
+  var format = document.getElementById('pdf2img-format').value;
+  var scale = parseFloat(document.getElementById('pdf2img-scale').value);
+  var mime = format === 'png' ? 'image/png' : 'image/jpeg';
+  var ext = format === 'png' ? 'png' : 'jpg';
   try {
     if (total === 1) {
-      const page = await pdf.getPage(1);
-      const vp = page.getViewport({ scale });
-      const canvas = document.createElement('canvas');
+      var page = await pdf.getPage(1);
+      var vp = page.getViewport({ scale: scale });
+      var canvas = document.createElement('canvas');
       canvas.width = vp.width; canvas.height = vp.height;
-      const ctx = canvas.getContext('2d');
+      var ctx = canvas.getContext('2d');
       await page.render({ canvasContext: ctx, viewport: vp }).promise;
-      canvas.toBlob(b => {
-        if (b) downloadBlob(b, state.pdf2img.file.name.replace('.pdf', '') + `.${ext}`, mime);
+      canvas.toBlob(function(b) {
+        if (b) downloadBlob(b, state.pdf2img.file.name.replace('.pdf', '') + '.' + ext, mime);
       });
       status.textContent = 'Image extracted';
       document.getElementById('pdf2img-progress').style.display = 'none';
       return;
     }
-    const JSZip = window.JSZip;
-    const zip = new JSZip();
-    for (let i = 1; i <= Math.min(total, proActivated ? total : FREE_LIMITS.pdf2img.pages); i++) {
-      const page = await pdf.getPage(i);
-      const vp = page.getViewport({ scale });
-      const canvas = document.createElement('canvas');
+    var maxPages = proActivated ? total : FREE_LIMITS.pdf2img.pages;
+    var limit = Math.min(total, maxPages);
+    var zip = new JSZip();
+    for (var i = 1; i <= limit; i++) {
+      var page = await pdf.getPage(i);
+      var vp = page.getViewport({ scale: scale });
+      var canvas = document.createElement('canvas');
       canvas.width = vp.width; canvas.height = vp.height;
-      const ctx = canvas.getContext('2d');
+      var ctx = canvas.getContext('2d');
       await page.render({ canvasContext: ctx, viewport: vp }).promise;
-      const blob = await new Promise(r => canvas.toBlob(r, mime, format === 'jpg' ? 0.92 : undefined));
-      if (blob) zip.file(`page_${i}.${ext}`, blob);
-      fill.style.width = (i / Math.min(total, proActivated ? total : FREE_LIMITS.pdf2img.pages) * 100) + '%';
+      var blob = await new Promise(function(r) { canvas.toBlob(r, mime, format === 'jpg' ? 0.92 : undefined); });
+      if (blob) zip.file('page_' + i + '.' + ext, blob);
+      fill.style.width = (i / limit * 100) + '%';
     }
-    const zipBytes = await zip.generateAsync({ type: 'blob' });
+    var zipBytes = await zip.generateAsync({ type: 'blob' });
     downloadBlob(zipBytes, state.pdf2img.file.name.replace('.pdf', '') + '_images.zip', 'application/zip');
-    status.textContent = `Extracted images from ${Math.min(total, proActivated ? total : FREE_LIMITS.pdf2img.pages)} page(s)`;
+    status.textContent = 'Extracted images from ' + limit + ' page(s)';
   } catch (e) { status.textContent = 'Error: ' + e.message; }
   document.getElementById('pdf2img-progress').style.display = 'none';
 }
 
 // ===== Helpers =====
 function downloadBlob(blob, filename, mime) {
-  const b = new Blob([blob], { type: mime });
+  var b = new Blob([blob], { type: mime });
   saveAs(b, filename);
-}
-
-function formatBytes(bytes) {
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1048576) return (bytes/1024).toFixed(0) + ' KB';
-  return (bytes/1048576).toFixed(1) + ' MB';
 }
 </script>
 </body>
