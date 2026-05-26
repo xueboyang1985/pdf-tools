@@ -243,9 +243,10 @@ output{display:block;}
 <tr><td>Ads</td><td>Shown</td><td>Hidden</td></tr>
 </tbody>
 </table>
-<div class="pro-price">$9.99 <span>one-time payment</span></div>
+<div class="pro-price">$9.99 <span>one-time payment (this tool)</span> &middot; $19.99 <span>bundle (all tools)</span></div>
 <div class="btn-group" style="justify-content:center;">
-<button class="btn btn-success" onclick="buyPro()">Buy PRO</button>
+<button class="btn btn-success" onclick="buyPro()">Buy PRO $9.99</button>
+<button class="btn btn-success" onclick="buyBundle()" style="background:#059669;">Buy Bundle $19.99</button>
 </div>
 <div class="license-row">
 <input type="text" id="license-input" placeholder="Enter PRO license key">
@@ -366,6 +367,18 @@ async function verifyLicenseOnline(key) {
       body: 'product_id=' + encodeURIComponent(GUMROAD_PRODUCT_ID) + '&license_key=' + encodeURIComponent(key)
     });
     var d = await r.json();
+    return (d.success && d.purchase) || await tryBundleKey(key);
+  } catch (e) { return await tryBundleKey(key); }
+}
+
+async function tryBundleKey(key) {
+  try {
+    var r = await fetch('https://api.gumroad.com/v2/licenses/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'product_id=' + encodeURIComponent('xdlh1FHKAU0E7q3ZRuHPaw==') + '&license_key=' + encodeURIComponent(key)
+    });
+    var d = await r.json();
     return d.success && d.purchase;
   } catch (e) { return false; }
 }
@@ -412,20 +425,26 @@ function setPro(key) {
 }
 
 var buyListenerAdded = false;
+function setupBuyListener() {
+  if (buyListenerAdded) return;
+  buyListenerAdded = true;
+  window.addEventListener('message', function(e) {
+    if (e.origin.indexOf('gumroad.com') !== -1 && e.data && e.data.license_key) {
+      var key = e.data.license_key;
+      if (key) {
+        document.getElementById('license-input').value = key;
+        activateLicense();
+      }
+    }
+  });
+}
 function buyPro() {
   window.open(GUMROAD_BUY_URL, 'gumroad', 'width=600,height=700');
-  if (!buyListenerAdded) {
-    buyListenerAdded = true;
-    window.addEventListener('message', function(e) {
-      if (e.origin.indexOf('gumroad.com') !== -1 && e.data && e.data.success && e.data.purchase) {
-        var key = e.data.license_key;
-        if (key) {
-          document.getElementById('license-input').value = key;
-          activateLicense();
-        }
-      }
-    });
-  }
+  setupBuyListener();
+}
+function buyBundle() {
+  window.open('https://xuebo8.gumroad.com/l/skxcpj', 'gumroad', 'width=600,height=700');
+  setupBuyListener();
 }
 
 function showProModal(source) {
