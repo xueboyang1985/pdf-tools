@@ -13,11 +13,11 @@
 <meta name="twitter:card" content="summary_large_image">
 <link rel="canonical" href="https://xueboyang1985.github.io/pdf-tools/">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f8fafc;color:#1a1a1a;line-height:1.6;}
@@ -226,6 +226,11 @@ output{display:block;}
 <p><a href="https://xueboyang1985.github.io/password-generator/">Password Generator</a> · <a href="https://xueboyang1985.github.io/qr-code-generator/">QR Code Generator</a> · <a href="https://xueboyang1985.github.io/json-csv-converter/">JSON-CSV Converter</a> · <a href="https://xueboyang1985.github.io/kindle-exporter/">Kindle Exporter</a> · <a href="https://xueboyang1985.github.io/subtitle-converter/">Subtitle Converter</a> · <a href="https://xueboyang1985.github.io/whatsapp-chat-formatter/">WhatsApp Formatter</a></p>
 </div>
 
+<div class="cross-card">
+<p>📝 Guides & tutorials:</p>
+<p><a href="blog/merge-pdf-free-online.html">Merge PDFs Free</a> · <a href="blog/split-pdf-online-free.html">Split PDF Online</a> · <a href="blog/jpg-to-pdf-online-free.html">JPG to PDF</a> · <a href="blog/best-free-pdf-tools-online.html">Best PDF Tools 2026</a> · <a href="blog/merge-pdf-free.html">PDF Merger Guide</a></p>
+</div>
+
 <div class="footer">PDF Tools &copy; 2026 &middot; 100% browser-based processing</div>
 </div>
 
@@ -280,7 +285,7 @@ const state = {
   img2pdf: { files: [] },
   pdf2img: { file: null, pdfDoc: null, totalPages: 0 }
 };
-let proActivated = !!localStorage.getItem('pdf_tools_pro');
+let proActivated = false; try { proActivated = !!localStorage.getItem('pdf_tools_pro'); } catch(e) {}
 
 // ===== Toast =====
 function toast(msg) {
@@ -328,12 +333,14 @@ function offlineProChecksum(key) {
 }
 
 function getDeviceId() {
-  var id = localStorage.getItem('pdf_device_id');
-  if (!id) {
-    id = 'DEV-' + Math.random().toString(36).slice(2, 10).toUpperCase();
-    localStorage.setItem('pdf_device_id', id);
-  }
-  return id;
+  try {
+    var id = localStorage.getItem('pdf_device_id');
+    if (!id) {
+      id = 'DEV-' + Math.random().toString(36).slice(2, 10).toUpperCase();
+      localStorage.setItem('pdf_device_id', id);
+    }
+    return id;
+  } catch(e) { return 'DEV-' + Math.random().toString(36).slice(2, 10).toUpperCase(); }
 }
 
 function getRegisteredDevices(key) {
@@ -348,7 +355,7 @@ function registerDevice(key) {
   var did = getDeviceId();
   if (devices.indexOf(did) === -1) {
     devices.push(did);
-    localStorage.setItem('pdf_devices_' + key, JSON.stringify(devices));
+    try { localStorage.setItem('pdf_devices_' + key, JSON.stringify(devices)); } catch(e) {}
   }
 }
 
@@ -416,8 +423,8 @@ async function activateLicense() {
 
 function setPro(key) {
   registerDevice(key);
-  localStorage.setItem('pdf_tools_pro_key', key);
-  localStorage.setItem('pdf_tools_pro', 'true');
+  try { localStorage.setItem('pdf_tools_pro_key', key); } catch(e) {}
+  try { localStorage.setItem('pdf_tools_pro', 'true'); } catch(e) {}
   proActivated = true;
   updateLimits();
   closeProModal();
@@ -429,7 +436,7 @@ function setupBuyListener() {
   if (buyListenerAdded) return;
   buyListenerAdded = true;
   window.addEventListener('message', function(e) {
-    if (e.origin.indexOf('gumroad.com') !== -1 && e.data && e.data.license_key) {
+    if (e.origin.indexOf('gumroad.com') !== -1 && e.data && e.data.success && e.data.purchase && e.data.license_key) {
       var key = e.data.license_key;
       if (key) {
         document.getElementById('license-input').value = key;
@@ -449,7 +456,7 @@ function buyBundle() {
 
 function showProModal(source) {
   document.getElementById('pro-modal').style.display = 'flex';
-  var existing = localStorage.getItem('pdf_tools_pro_key');
+  var existing = ''; try { existing = localStorage.getItem('pdf_tools_pro_key') || ''; } catch(e) {}
   if (existing) document.getElementById('license-input').value = existing;
 }
 
@@ -466,7 +473,7 @@ function updateLimits() {
 }
 
 // Check existing PRO on load
-if (localStorage.getItem('pdf_tools_pro')) proActivated = true;
+try { if (localStorage.getItem('pdf_tools_pro')) proActivated = true; } catch(e) {}
 updateLimits();
 
 // ===== Merge PDFs =====
