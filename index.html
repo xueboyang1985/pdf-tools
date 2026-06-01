@@ -291,6 +291,19 @@ const state = {
   pdf2img: { file: null, pdfDoc: null, totalPages: 0 }
 };
 let proActivated = false; try { proActivated = !!localStorage.getItem('pdf_tools_pro'); } catch(e) {}
+let trialUses = 3;
+
+function useProOrTrial() {
+  if (proActivated) return true;
+  if (trialUses > 0) { trialUses--; return true; }
+  return false;
+}
+
+function trialLabel() {
+  if (proActivated) return '';
+  if (trialUses > 0) return ' (Trial PRO: ' + trialUses + ' left)';
+  return '';
+}
 
 // ===== Toast =====
 function toast(msg) {
@@ -542,7 +555,7 @@ async function doMerge() {
       var buf = await state.merge.files[i].arrayBuffer();
       var pdf = await PDFLib.PDFDocument.load(buf, { ignoreEncryption: true });
       var indices = pdf.getPageIndices();
-      if (!proActivated && totalPages + indices.length > FREE_LIMITS.merge.pages) {
+      if (!useProOrTrial() && totalPages + indices.length > FREE_LIMITS.merge.pages) {
         var allowed = FREE_LIMITS.merge.pages - totalPages;
         if (allowed <= 0) { status.textContent = 'Free limit reached. Please get PRO.'; return; }
         var copied = await mergedPdf.copyPages(pdf, indices.slice(0, allowed));
@@ -601,7 +614,7 @@ async function renderSplitPreview(pdf) {
     container.appendChild(div);
   }
   document.getElementById('btn-split').disabled = false;
-  document.getElementById('btn-split-all').disabled = !proActivated && pdf.getPageCount() > FREE_LIMITS.split.pages;
+  document.getElementById('btn-split-all').disabled = !useProOrTrial() && pdf.getPageCount() > FREE_LIMITS.split.pages;
 }
 
 function parsePageRange(str, total) {
@@ -639,8 +652,8 @@ async function doSplit() {
   var input = document.getElementById('split-pages');
   var pages = parsePageRange(input.value.trim(), pdf.getPageCount());
   if (pages.length === 0) { toast('No valid pages specified'); return; }
-  if (!proActivated && pages.length > FREE_LIMITS.split.pages) {
-    toast('Free: max ' + FREE_LIMITS.split.pages + ' pages. Get PRO for unlimited.'); return;
+  if (!useProOrTrial() && pages.length > FREE_LIMITS.split.pages) {
+    toast('Free: max ' + FREE_LIMITS.split.pages + ' pages. Get PRO for unlimited.'); showProModal('split'); return;
   }
   var status = document.getElementById('split-status');
   status.textContent = 'Processing...';
@@ -659,8 +672,8 @@ async function splitAllPages() {
   var pdf = state.split.pdfDoc;
   if (!pdf) return;
   var total = pdf.getPageCount();
-  if (!proActivated && total > FREE_LIMITS.split.pages) {
-    toast('Free: max ' + FREE_LIMITS.split.pages + ' pages. Get PRO for unlimited.'); return;
+  if (!useProOrTrial() && total > FREE_LIMITS.split.pages) {
+    toast('Free: max ' + FREE_LIMITS.split.pages + ' pages. Get PRO for unlimited.'); showProModal('split'); return;
   }
   var status = document.getElementById('split-status');
   status.textContent = 'Splitting ' + total + ' pages...';
@@ -733,8 +746,8 @@ function removeImg2Pdf(idx) {
 async function doImg2Pdf() {
   var files = state.img2pdf.files;
   if (!files.length) { toast('Please add at least one image'); return; }
-  if (!proActivated && files.length > FREE_LIMITS.img2pdf.images) {
-    toast('Free: max ' + FREE_LIMITS.img2pdf.images + ' images. Get PRO for unlimited.'); return;
+  if (!useProOrTrial() && files.length > FREE_LIMITS.img2pdf.images) {
+    toast('Free: max ' + FREE_LIMITS.img2pdf.images + ' images. Get PRO for unlimited.'); showProModal('img2pdf'); return;
   }
   var status = document.getElementById('img2pdf-status');
   var fill = document.getElementById('img2pdf-fill');
@@ -840,8 +853,8 @@ async function doPdf2Img() {
   var pdf = state.pdf2img.pdfDoc;
   if (!pdf) { toast('Please load a PDF first'); return; }
   var total = pdf.numPages;
-  if (!proActivated && total > FREE_LIMITS.pdf2img.pages) {
-    toast('Free: max ' + FREE_LIMITS.pdf2img.pages + ' pages. Get PRO for unlimited.'); return;
+  if (!useProOrTrial() && total > FREE_LIMITS.pdf2img.pages) {
+    toast('Free: max ' + FREE_LIMITS.pdf2img.pages + ' pages. Get PRO for unlimited.'); showProModal('pdf2img'); return;
   }
   var status = document.getElementById('pdf2img-status');
   var fill = document.getElementById('pdf2img-fill');
